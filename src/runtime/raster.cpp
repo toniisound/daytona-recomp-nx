@@ -161,8 +161,48 @@ void Raster::render(const std::vector<GeoPoly> &polys, int windows, const VideoM
         if (polys[a].z != polys[b].z) return polys[a].z < polys[b].z;
         return a > b;
     });
-    for (size_t i : order)
-        if (polys[i].window <= windows) render_one(polys[i], crtc_x, crtc_y, render_x, render_y, clip_minx, clip_maxx, clip_miny, clip_maxy);
+    const int lanes = runner_ ? lanes_ : 1;
+    if (lanes <= 1) {
+        for (size_t i : order)
+            if (polys[i].window <= windows) render_one(polys[i], crtc_x, crtc_y, render_x, render_y, clip_minx, clip_maxx, clip_miny, clip_maxy);
+        return;
+    }
+    // Lanes 1..n-1 draw into helper copies with this object's settings.
+    while (int(helpers_.size()) < lanes - 1) helpers_.push_back(std::make_unique<Raster>());
+    for (int k = 1; k < lanes; ++k) {
+        Raster &h = *helpers_[size_t(k - 1)];
+        h.set_wide_margin(margin_);
+        h.hud_dx_ = hud_dx_;
+        h.hud_z_ = hud_z_;
+        std::copy(std::begin(hud_box_), std::end(hud_box_), std::begin(h.hud_box_));
+    }
+    const std::function<void(int)> job = [&](int k) {
+        Raster &r = k == 0 ? *this : *helpers_[size_t(k - 1)];
+        r.mem_ = &mem;
+        r.lane_ = k;
+        r.lane_count_ = lanes;
+        if (k) {
+#ifdef M2_VITA_RENDER_OPT
+            for (auto &entry : r.shades_) entry.key = 0xffffffffu;
+#endif
+            for (size_t y = size_t(k); y < 512; y += size_t(lanes)) {
+                std::fill_n(r.dest_.begin() + std::ptrdiff_t(y * size_t(stride_)), stride_, 0u);
+                std::fill_n(r.fill_.begin() + std::ptrdiff_t(y * size_t(stride_)), stride_, u8(0));
+            }
+        }
+        for (size_t i : order)
+            if (polys[i].window <= windows) r.render_one(polys[i], crtc_x, crtc_y, render_x, render_y, clip_minx, clip_maxx, clip_miny, clip_maxy);
+        r.lane_ = 0;
+        r.lane_count_ = 1;
+    };
+    runner_(lanes, job);
+    // Merge: each lane owns its scanlines outright.
+    for (int k = 1; k < lanes; ++k) {
+        const Raster &h = *helpers_[size_t(k - 1)];
+        for (size_t y = size_t(k); y < 512; y += size_t(lanes))
+            std::copy_n(h.dest_.begin() + std::ptrdiff_t(y * size_t(stride_)), stride_,
+                        dest_.begin() + std::ptrdiff_t(y * size_t(stride_)));
+    }
 }
 
 int Raster::coverage_estimate(const std::vector<GeoPoly> &polys, int windows, int crtc_x, int crtc_y) const {
@@ -328,6 +368,7 @@ const uint32_t *Raster::shade_table(const Extra &o) {
 #endif
 
 void Raster::scanline(int renderer, int32_t y, int32_t x0, int32_t x1, const float *start, const float *dpdx, const Extra &o) {
+    if (!own_row(y)) return; // another lane's scanline
 #ifdef M2_VITA_RENDER_OPT
     if (x0 >= x1) return;
     // A completely filled span cannot contribute any pixel. Test four bytes
@@ -390,6 +431,7 @@ void Raster::render_triangle(const int *clip, int renderer, const Extra &o, cons
     }
 
     for (int32_t curscan = v1yclip; curscan < v3yclip; curscan++) {
+        if (!own_row(curscan)) continue; // another lane's scanline
         const float fully = float(curscan) + 0.5f;
         const float startx = v1->x + (fully - v1->y) * dxdy_v1v3;
         const float stopx = fully < v2->y ? v1->x + (fully - v1->y) * dxdy_v1v2 : v2->x + (fully - v2->y) * dxdy_v2v3;
@@ -463,6 +505,7 @@ void Raster::render_polygon(const int *clip, int renderer, const Extra &o, const
         const float fully = float(curscan) + 0.5f;
         while (fully > ledge->v2->y && fully < v[maxv].y) ++ledge;
         while (fully > redge->v2->y && fully < v[maxv].y) ++redge;
+        if (!own_row(curscan)) continue; // another lane's scanline (edges above still advance)
         const float startx = ledge->v1->x + (fully - ledge->v1->y) * ledge->dxdy;
         const float stopx = redge->v1->x + (fully - redge->v1->y) * redge->dxdy;
         int32_t istartx = round_coordinate(startx), istopx = round_coordinate(stopx);

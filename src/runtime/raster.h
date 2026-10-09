@@ -20,6 +20,8 @@
 #include <cstdint>
 #include <cstddef>
 #include <array>
+#include <functional>
+#include <memory>
 #include <vector>
 
 namespace rt {
@@ -78,6 +80,19 @@ public:
     int coverage_estimate(const std::vector<GeoPoly> &polys, int windows, int crtc_x, int crtc_y) const;
     uint64_t hash(int minx, int maxx, int miny, int maxy) const; // as the MAME log computes it
 
+    // Optional multi-core rendering (a frontend's thread pool). `run(count,
+    // job)` must call job(0..count-1), each exactly once, possibly at the same
+    // time, and return when all have finished. Lane k draws the scanlines
+    // y % lanes == k of every polygon, in the usual order, into its own copy
+    // of the layer; each scanline is computed exactly as in a single-lane
+    // render (MAME's poly.h also splits work by scanline), so the merged
+    // layer is identical. lanes <= 1 or no runner: the plain serial render.
+    using Runner = std::function<void(int count, const std::function<void(int)> &job)>;
+    void set_parallel(Runner runner, int lanes) {
+        runner_ = std::move(runner);
+        lanes_ = std::clamp(lanes, 1, 8);
+    }
+
     struct Extra; // per-polygon shading state (MAME m2_poly_extra_data)
 
 private:
@@ -87,6 +102,10 @@ private:
     uint16_t hud_z_ = 0;
     std::vector<uint32_t> dest_;
     std::vector<uint8_t> fill_;
+    Runner runner_;
+    int lanes_ = 1;                            // configured lanes
+    int lane_ = 0, lane_count_ = 1;            // this object's lane while rendering
+    std::vector<std::unique_ptr<Raster>> helpers_; // lanes 1.. (lane 0 is this object)
     uint8_t gamma_[256];
     const VideoMem *mem_ = nullptr;
 #ifdef M2_VITA_RENDER_OPT
@@ -101,6 +120,9 @@ private:
     std::vector<std::size_t> order_;
 #endif
 
+    bool own_row(int32_t y) const {
+        return lane_count_ <= 1 || ((y % lane_count_) + lane_count_) % lane_count_ == lane_;
+    }
     void render_one(GeoPoly poly, int crtc_x, int crtc_y, int render_x, int render_y, int clip_minx, int clip_maxx,
                     int clip_miny, int clip_maxy);
     template <bool Translucent> void draw_scanline_solid(int32_t y, int32_t x0, int32_t x1, const float *start, const float *dpdx, const Extra &o);

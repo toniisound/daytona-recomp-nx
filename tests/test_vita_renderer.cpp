@@ -13,6 +13,7 @@
 #include <memory>
 #include <random>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -65,6 +66,14 @@ rt::GeoPoly polygon(int vertices, int renderer, int lod, bool checker, bool micr
     }
     return p;
 }
+// Multi-core drawing (Video/Raster set_parallel) must give identical pixels.
+int g_lanes = 1;
+void threaded(int count, const std::function<void(int)> &job) {
+    std::vector<std::thread> threads;
+    for (int k = 1; k < count; ++k) threads.emplace_back(job, k);
+    job(0);
+    for (auto &t : threads) t.join();
+}
 void compare(const uint32_t *a,const uint32_t *b,size_t n,int frame,const char *kind) {
     for(size_t i=0;i<n;++i)if(a[i]!=b[i]) {
         std::fprintf(stderr,"FAIL: %s case %d pixel %zu actual=%08x expected=%08x\n",kind,frame,i,a[i],b[i]);std::exit(1);
@@ -98,6 +107,7 @@ void cache_tests() {
 void video_tests(int cases) {
     Memory mem;auto fast=std::make_unique<rt::Video>(mem.tile.data(),mem.chars.data());
     auto slow=std::make_unique<reference::Video>(mem.tile.data(),mem.chars.data());
+    if(g_lanes>1)fast->set_raster_parallel(threaded,g_lanes);
     for(unsigned i=0;i<0x2000;++i){fast->palette_w(i,mem.pal.data(),mem.xlat.data());slow->palette_w(i,mem.pal.data(),mem.xlat.data());}
     for(int frame=0;frame<cases;++frame) {
         for(int j=0;j<17;++j)mem.word(unsigned(pick(0x4000)),uint16_t(random32()));
@@ -126,6 +136,7 @@ void video_tests(int cases) {
 }
 void raster_tests(int cases) {
     Memory mem;rt::Raster fast;reference::Raster slow;
+    if(g_lanes>1)fast.set_parallel(threaded,g_lanes);
     for(int frame=0;frame<cases;++frame) {
         std::vector<rt::GeoPoly> p;
         for(int j=0;j<20;++j)p.push_back(polygon(3+pick(6),frame%4,pick(2400)-1200,bool(frame&4),bool(frame&8)));
@@ -188,5 +199,6 @@ void benchmark() {
 int main(int argc,char **argv) {
     if(argc>1 && std::string(argv[1])=="--bench"){benchmark();return 0;}
     system24_upload_tests();cache_tests();video_tests(160);raster_tests(640);
+    for(int lanes:{2,3}){g_lanes=lanes;std::printf("With %d drawing lanes (threads):\n",lanes);video_tests(160);raster_tests(640);}
     std::puts("All renderer comparisons passed.");
 }

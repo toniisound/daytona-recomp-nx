@@ -1,6 +1,7 @@
 #include "runtime/zip.h"
 
 #include <array>
+#include <cstdio>
 #include <cstring>
 #include <fstream>
 #include <iterator>
@@ -163,9 +164,17 @@ void inflate(const uint8_t *in, size_t in_len, std::vector<uint8_t> &out) {
 }
 
 Zip::Zip(const std::string &path) {
-    std::ifstream f(path, std::ios::binary);
+    // One sized read: a byte-by-byte stream iterator is very slow on console
+    // file systems (Switch sdmc:) and grows the buffer to ~2x the file.
+    std::FILE *f = std::fopen(path.c_str(), "rb");
     if (!f) throw ZipError("cannot open " + path);
-    data_.assign(std::istreambuf_iterator<char>(f), {});
+    long size = -1;
+    if (std::fseek(f, 0, SEEK_END) == 0) size = std::ftell(f);
+    if (size < 0 || std::fseek(f, 0, SEEK_SET) != 0) { std::fclose(f); throw ZipError("cannot read " + path); }
+    data_.resize(size_t(size));
+    const size_t got = size ? std::fread(data_.data(), 1, data_.size(), f) : 0;
+    std::fclose(f);
+    if (got != data_.size()) throw ZipError("cannot read " + path);
     // end of central directory: the last 0x06054b50 within 64 KiB of the end
     const size_t n = data_.size();
     if (n < 22) throw ZipError(path + " is not a zip file");

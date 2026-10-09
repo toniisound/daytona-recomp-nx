@@ -18,9 +18,16 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <utility>
 #include <vector>
 
 namespace rt {
+
+// The rows one drawing lane owns (y % lanes == lane); the default is every row.
+struct VideoRows {
+    int lane = 0, lanes = 1;
+    bool own(int y) const { return lanes <= 1 || ((y % lanes) + lanes) % lanes == lane; }
+};
 
 class Video {
 public:
@@ -123,6 +130,14 @@ public:
     int render_y() const { return render_y_; }
     uint64_t screen_hash() const;
     const Raster &raster() const { return raster_; }
+    // Multi-core drawing (a frontend's thread pool, as Raster::set_parallel):
+    // the 3D layer and the tilemap layers are drawn in scanline lanes. Every
+    // row is drawn exactly as by one lane, so the screen is identical.
+    void set_raster_parallel(Raster::Runner runner, int lanes) {
+        runner_ = runner;
+        lanes_ = std::clamp(lanes, 1, 8);
+        raster_.set_parallel(std::move(runner), lanes);
+    }
     bool rendered_now() const { return rendered_now_; } // the last update drew the 3D layer afresh
     uint64_t raster_hash() const { return raster_.hash(0, 495, 0, 383); }
 
@@ -134,10 +149,14 @@ public:
 private:
     uint16_t tile(uint32_t i) const { return uint16_t(tile_ram_[i * 2] | tile_ram_[i * 2 + 1] << 8); }
     void build_layer(int layer); // pixmap_/flags_ for one tilemap
-    void draw(std::vector<uint32_t> &bitmap, int layer, int flags);
+    using Rows = VideoRows;
+    void draw(std::vector<uint32_t> &bitmap, int layer, int flags, Rows rows = {});
     void draw_rect(std::vector<uint32_t> &dm, const uint16_t *mask, uint16_t tpri, int flags, int win, int L, int sx,
-                   int sy, int xx1, int yy1, int xx2, int yy2);
-    void tilemap_draw(std::vector<uint32_t> &dm, int L, int sx, int sy, int minx, int maxx, int miny, int maxy, int flags);
+                   int sy, int xx1, int yy1, int xx2, int yy2, Rows rows = {});
+    void tilemap_draw(std::vector<uint32_t> &dm, int L, int sx, int sy, int minx, int maxx, int miny, int maxy, int flags,
+                      Rows rows = {});
+    Raster::Runner runner_;
+    int lanes_ = 1;
 
     uint64_t ticks() const { return profile_clock_ ? profile_clock_() : 0; }
 #ifndef M2_VITA_RENDER_OPT

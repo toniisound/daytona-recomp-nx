@@ -286,6 +286,13 @@ add_executable(test_geo_clip tests/test_geo_clip.cpp)
 target_include_directories(test_geo_clip PRIVATE src)
 add_test(NAME geo_clip COMMAND test_geo_clip)
 
+# Multi-core rasterization (scanline lanes) draws the same layer as one lane.
+find_package(Threads REQUIRED)
+add_executable(test_raster_lanes tests/test_raster_lanes.cpp src/runtime/raster.cpp)
+target_include_directories(test_raster_lanes PRIVATE src)
+target_link_libraries(test_raster_lanes PRIVATE Threads::Threads)
+add_test(NAME raster_lanes COMMAND test_raster_lanes)
+
 add_executable(test_geo_stream tests/test_geo_stream.cpp)
 target_include_directories(test_geo_stream PRIVATE src)
 add_test(NAME geo_stream COMMAND test_geo_stream)

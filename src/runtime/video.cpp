@@ -195,7 +195,8 @@ void Video::update_tile_cache() {
 // segaic24 draw_rect, rgb32 version (model 1/2): copy a rectangle of the
 // layer's pixmap to the bitmap through the 8-pixel window mask.
 void Video::draw_rect(std::vector<uint32_t> &dm, const uint16_t *mask, uint16_t tpri, int flags, int win, int L, int sx,
-                      int sy, int xx1, int yy1, int xx2, int yy2) {
+                      int sy, int xx1, int yy1, int xx2, int yy2, Rows rows) {
+    const int first_row = yy1;
     const uint16_t *source = &pixmap_[L][size_t(sy) * 512 + size_t(sx)];
     const uint8_t *trans = &flags_[L][size_t(sy) * 512 + size_t(sx)];
     uint32_t *dest = &dm[size_t(yy1) * size_t(dw_) + size_t(xx1)];
@@ -208,6 +209,10 @@ void Video::draw_rect(std::vector<uint32_t> &dm, const uint16_t *mask, uint16_t 
         mask++;
     }
     for (int y = 0; y < yy2; y++) {
+        if (!rows.own(first_row + y)) { // another lane's row
+            source += 512; trans += 512; dest += dw_; mask += 4;
+            continue;
+        }
         const uint16_t *src = source;
         const uint8_t *srct = trans;
         uint32_t *dst = dest;
@@ -272,19 +277,22 @@ void Video::draw_rect(std::vector<uint32_t> &dm, const uint16_t *mask, uint16_t 
 // tilemap_t::draw with one scroll value: dest (x, y) takes pixmap
 // ((x + sx) & 511, (y + sy) & 511) where (flags & mask) == value; mask is the
 // category, plus layer 0 (opacity) unless drawing opaque.
-void Video::tilemap_draw(std::vector<uint32_t> &dm, int L, int sx, int sy, int minx, int maxx, int miny, int maxy, int flags) {
+void Video::tilemap_draw(std::vector<uint32_t> &dm, int L, int sx, int sy, int minx, int maxx, int miny, int maxy, int flags,
+                         Rows rows) {
     const uint8_t cat = uint8_t(flags & CATEGORY_MASK);
     const uint8_t mask = (flags & DRAW_OPAQUE) ? CATEGORY_MASK : uint8_t(CATEGORY_MASK | PIXEL_LAYER0);
     const uint8_t value = (flags & DRAW_OPAQUE) ? cat : uint8_t(cat | PIXEL_LAYER0);
-    for (int y = std::max(miny, 0); y <= std::min(maxy, H - 1); y++)
+    for (int y = std::max(miny, 0); y <= std::min(maxy, H - 1); y++) {
+        if (!rows.own(y)) continue; // another lane's row
         for (int x = std::max(minx, 0); x <= std::min(maxx, dw_ - 1); x++) {
             const size_t i = size_t((y + sy) & 511) * 512 + size_t((x + sx) & 511);
             if ((flags_[L][i] & mask) == value) dm[size_t(y) * size_t(dw_) + size_t(x)] = pens_[pixmap_[L][i]];
         }
+    }
 }
 
 // segaic24 draw_common for the rgb32 bitmap, cliprect = the whole screen.
-void Video::draw(std::vector<uint32_t> &bitmap, int layer, int flags) {
+void Video::draw(std::vector<uint32_t> &bitmap, int layer, int flags, Rows rows) {
     uint16_t hscr = tile(0x5000 + uint32_t(layer >> 1));
     uint16_t vscr = tile(0x5004 + uint32_t(layer >> 1));
     const uint16_t ctrl = tile(0x5004 + uint32_t((layer >> 1) & 2));
@@ -308,7 +316,7 @@ void Video::draw(std::vector<uint32_t> &bitmap, int layer, int flags) {
                 for (int y = 0; y < H; y++) {
                     const int l1 = y >= v ? layer ^ 1 : layer;
                     const uint16_t h = tile(hscrtb + uint32_t(y)) & 0x1ff;
-                    tilemap_draw(bitmap, l1, -h, sy, 0, dw_ - 1, y, y, fl);
+                    tilemap_draw(bitmap, l1, -h, sy, 0, dw_ - 1, y, y, fl, rows);
                 }
                 break;
             }
@@ -319,8 +327,8 @@ void Video::draw(std::vector<uint32_t> &bitmap, int layer, int flags) {
                     const int h = hscr & 0x1ff;
                     int l1 = layer;
                     if (!(hscr & 0x200)) l1 ^= 1;
-                    tilemap_draw(bitmap, l1, -h, sy, 0, std::min(dw_ - 1, h - 1), y, y, fl);
-                    tilemap_draw(bitmap, l1 ^ 1, -h, sy, std::max(0, h), dw_ - 1, y, y, fl);
+                    tilemap_draw(bitmap, l1, -h, sy, 0, std::min(dw_ - 1, h - 1), y, y, fl, rows);
+                    tilemap_draw(bitmap, l1 ^ 1, -h, sy, std::max(0, h), dw_ - 1, y, y, fl, rows);
                 }
                 break;
             }
@@ -330,16 +338,16 @@ void Video::draw(std::vector<uint32_t> &bitmap, int layer, int flags) {
             case 1: {
                 const int v = (-vscr) & 0x1ff;
                 if (!((-vscr) & 0x200)) layer ^= 1;
-                tilemap_draw(bitmap, layer, sx, sy, 0, dw_ - 1, 0, std::min(H - 1, v - 1), fl);
-                tilemap_draw(bitmap, layer ^ 1, sx, sy, 0, dw_ - 1, std::max(0, v), H - 1, fl);
+                tilemap_draw(bitmap, layer, sx, sy, 0, dw_ - 1, 0, std::min(H - 1, v - 1), fl, rows);
+                tilemap_draw(bitmap, layer ^ 1, sx, sy, 0, dw_ - 1, std::max(0, v), H - 1, fl, rows);
                 break;
             }
             case 2:
             case 3: {
                 const int h = hscr & 0x1ff;
                 if (!(hscr & 0x200)) layer ^= 1;
-                tilemap_draw(bitmap, layer, sx, sy, 0, std::min(dw_ - 1, h - 1), 0, H - 1, fl);
-                tilemap_draw(bitmap, layer ^ 1, sx, sy, std::max(0, h), dw_ - 1, 0, H - 1, fl);
+                tilemap_draw(bitmap, layer, sx, sy, 0, std::min(dw_ - 1, h - 1), 0, H - 1, fl, rows);
+                tilemap_draw(bitmap, layer ^ 1, sx, sy, std::max(0, h), dw_ - 1, 0, H - 1, fl, rows);
                 break;
             }
             }
@@ -354,10 +362,10 @@ void Video::draw(std::vector<uint32_t> &bitmap, int layer, int flags) {
         for (int y = 0; y < 384; y++) {
             hscr = uint16_t((-tile(hscrtb + uint32_t(y))) & 0x1ff);
             if (hscr + dw_ <= 512) {
-                draw_rect(bitmap, mask, tpri, flags, win, layer, hscr, vscr, 0, y, dw_, y + 1);
+                draw_rect(bitmap, mask, tpri, flags, win, layer, hscr, vscr, 0, y, dw_, y + 1, rows);
             } else {
-                draw_rect(bitmap, mask, tpri, flags, win, layer, hscr, vscr, 0, y, 512 - hscr, y + 1);
-                draw_rect(bitmap, mask, tpri, flags, win, layer, 0, vscr, 512 - hscr, y, dw_, y + 1);
+                draw_rect(bitmap, mask, tpri, flags, win, layer, hscr, vscr, 0, y, 512 - hscr, y + 1, rows);
+                draw_rect(bitmap, mask, tpri, flags, win, layer, 0, vscr, 512 - hscr, y, dw_, y + 1, rows);
             }
             vscr = (vscr + 1) & 0x1ff;
         }
@@ -366,20 +374,20 @@ void Video::draw(std::vector<uint32_t> &bitmap, int layer, int flags) {
         vscr = uint16_t((+vscr) & 0x1ff);
         if (hscr + dw_ <= 512) {
             if (vscr + 384 <= 512) {
-                draw_rect(bitmap, mask, tpri, flags, win, layer, hscr, vscr, 0, 0, dw_, 384);
+                draw_rect(bitmap, mask, tpri, flags, win, layer, hscr, vscr, 0, 0, dw_, 384, rows);
             } else {
-                draw_rect(bitmap, mask, tpri, flags, win, layer, hscr, vscr, 0, 0, dw_, 512 - vscr);
-                draw_rect(bitmap, mask, tpri, flags, win, layer, hscr, 0, 0, 512 - vscr, dw_, 384);
+                draw_rect(bitmap, mask, tpri, flags, win, layer, hscr, vscr, 0, 0, dw_, 512 - vscr, rows);
+                draw_rect(bitmap, mask, tpri, flags, win, layer, hscr, 0, 0, 512 - vscr, dw_, 384, rows);
             }
         } else {
             if (vscr + 384 <= 512) {
-                draw_rect(bitmap, mask, tpri, flags, win, layer, hscr, vscr, 0, 0, 512 - hscr, 384);
-                draw_rect(bitmap, mask, tpri, flags, win, layer, 0, vscr, 512 - hscr, 0, dw_, 384);
+                draw_rect(bitmap, mask, tpri, flags, win, layer, hscr, vscr, 0, 0, 512 - hscr, 384, rows);
+                draw_rect(bitmap, mask, tpri, flags, win, layer, 0, vscr, 512 - hscr, 0, dw_, 384, rows);
             } else {
-                draw_rect(bitmap, mask, tpri, flags, win, layer, hscr, vscr, 0, 0, 512 - hscr, 512 - vscr);
-                draw_rect(bitmap, mask, tpri, flags, win, layer, 0, vscr, 512 - hscr, 0, dw_, 512 - vscr);
-                draw_rect(bitmap, mask, tpri, flags, win, layer, hscr, 0, 0, 512 - vscr, 512 - hscr, 384);
-                draw_rect(bitmap, mask, tpri, flags, win, layer, 0, 0, 512 - hscr, 512 - vscr, dw_, 384);
+                draw_rect(bitmap, mask, tpri, flags, win, layer, hscr, vscr, 0, 0, 512 - hscr, 512 - vscr, rows);
+                draw_rect(bitmap, mask, tpri, flags, win, layer, 0, vscr, 512 - hscr, 0, dw_, 512 - vscr, rows);
+                draw_rect(bitmap, mask, tpri, flags, win, layer, hscr, 0, 0, 512 - vscr, 512 - hscr, 384, rows);
+                draw_rect(bitmap, mask, tpri, flags, win, layer, 0, 0, 512 - hscr, 512 - vscr, dw_, 384, rows);
             }
         }
     }
@@ -454,28 +462,43 @@ void Video::screen_update(const std::vector<GeoPoly> &polys, int windows, const 
     // Non-zero pixels of a `width`-wide source onto the screen at column `at`.
     const size_t out_w = size_t(width());
     auto copy_trans = [&](const uint32_t *source, size_t stride, int width = W, int at = 0) {
-        for (int y = 0; y < H; ++y)
-            for (int x = 0; x < width; ++x)
-                if (const uint32_t pixel = source[size_t(y) * stride + size_t(x)])
-                    screen_[size_t(y) * out_w + size_t(at + x)] = pixel;
+        auto rows = [&](Rows lane) {
+            for (int y = 0; y < H; ++y) {
+                if (!lane.own(y)) continue;
+                for (int x = 0; x < width; ++x)
+                    if (const uint32_t pixel = source[size_t(y) * stride + size_t(x)])
+                        screen_[size_t(y) * out_w + size_t(at + x)] = pixel;
+            }
+        };
+        if (runner_ && lanes_ > 1) runner_(lanes_, [&](int k) { rows(Rows{k, lanes_}); });
+        else rows(Rows{});
     };
 #ifdef M2_VITA_RENDER_OPT
     before = ticks();
-    if (background_dirty_) {
-        // All tile writes are replacements, not blends. Drawing the back
-        // layers over pen 0 is identical to zero + transparent copy over pen 0.
-        std::fill(background_.begin(), background_.end(), pens_[0]);
-        for (int layer = 3; layer >= 2; --layer) draw(background_, layer << 1, DRAW_OPAQUE);
-        for (int layer = 1; layer >= 0; --layer) draw(background_, layer << 1, 0);
-        background_dirty_ = false;
-        ++background_generation_;
-        profile_.layers_rebuilt = true;
-    }
-    if (foreground_dirty_) {
-        std::fill(sys24_.begin(), sys24_.end(), 0u);
-        for (int layer = 3; layer >= 0; --layer) draw(sys24_, (layer << 1) | 1, 0);
-        foreground_dirty_ = false;
-        ++foreground_generation_;
+    if (background_dirty_ || foreground_dirty_) {
+        const bool back = background_dirty_, front = foreground_dirty_;
+        // Each lane rebuilds its own rows of both layers (rows are independent:
+        // every tilemap write lands on the row being drawn).
+        auto rebuild = [&](Rows rows) {
+            const size_t row = size_t(dw_);
+            if (back) {
+                // All tile writes are replacements, not blends. Drawing the back
+                // layers over pen 0 is identical to zero + transparent copy over pen 0.
+                for (int y = 0; y < int(background_.size() / row); ++y)
+                    if (rows.own(y)) std::fill_n(background_.begin() + std::ptrdiff_t(size_t(y) * row), row, pens_[0]);
+                for (int layer = 3; layer >= 2; --layer) draw(background_, layer << 1, DRAW_OPAQUE, rows);
+                for (int layer = 1; layer >= 0; --layer) draw(background_, layer << 1, 0, rows);
+            }
+            if (front) {
+                for (int y = 0; y < int(sys24_.size() / row); ++y)
+                    if (rows.own(y)) std::fill_n(sys24_.begin() + std::ptrdiff_t(size_t(y) * row), row, 0u);
+                for (int layer = 3; layer >= 0; --layer) draw(sys24_, (layer << 1) | 1, 0, rows);
+            }
+        };
+        if (runner_ && lanes_ > 1) runner_(lanes_, [&](int lane) { rebuild(Rows{lane, lanes_}); });
+        else rebuild(Rows{});
+        if (back) { background_dirty_ = false; ++background_generation_; }
+        if (front) { foreground_dirty_ = false; ++foreground_generation_; }
         profile_.layers_rebuilt = true;
     }
     profile_.tile_draw = ticks() - before;

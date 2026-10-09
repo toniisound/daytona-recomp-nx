@@ -1,138 +1,175 @@
-# Daytona USA static recompilation
+<p align="center">
+  <img src="docs/logo.png" alt="Daytona Recomp NX" width="384">
+</p>
 
-Daytona USA (Sega Model 2) rebuilt as native code: the game's i960 program
-and the TGP program it uploads are statically recompiled to portable C++,
-and the fixed-function hardware (geometrizer, rasterizer, tilemaps) is native
-C++. No interpreter, no emulation core. MAME is used only as a test oracle.
-See `docs/daytona-usa-recomp-design.md` and `HANDOFF.md`.
+<h1 align="center">Daytona Recomp NX</h1>
 
-No game data is in this repository. You need your own ROM set (a
-MAME-format `.zip` or `.7z`): `daytona93` (Daytona USA Deluxe '93) or
-`daytona` (Revision A, 1994), or both.
+<p align="center">
+  A native Nintendo Switch port of the <b>Daytona USA</b> (Sega Model 2) static recompilation.<br>
+  No emulator, no interpreter: the arcade game's own code, recompiled to C++ and built as a homebrew <code>.nro</code>.
+</p>
 
-## Setup
+---
 
-**New here? Follow [docs/getting-started.md](docs/getting-started.md)**: step
-by step for Windows, macOS and Linux, with fixes for the usual problems.
+> [!IMPORTANT]
+> **This is an unofficial fan project. It is not affiliated with, endorsed by or sponsored by SEGA.**
+> *Daytona USA* and *SEGA* are trademarks of SEGA Corporation. All other trademarks belong to their owners.
+>
+> **No ROMs, game code or game assets are included in this repository, and none will be provided.**
+> You need your own legally obtained Daytona USA arcade ROM set. The game code is generated on your own
+> computer from that ROM set when you build, so **do not share the `.nro` you build**: it contains code
+> translated from the original game.
 
-In short:
+## About
 
-1. Copy your ROM set into `roms/` in the project folder, named exactly after
-   the set: `roms/daytona93.zip` (Daytona USA Deluxe '93) and/or
-   `roms/daytona.zip` (Revision A, 1994), or `.7z`. Each is built as its own
-   game; other Daytona sets are rejected.
-2. Run setup. Linux or macOS:
+This is a fork of [alphanu1/daytona-arcade-recomp](https://github.com/alphanu1/daytona-arcade-recomp), which
+statically recompiles Daytona USA's i960 main program, its TGP (geometry) program and the sound board's 68000
+program to portable C++, with the Model 2 hardware (geometrizer, rasterizer, tilemaps, sound chips) as native code.
 
-       ./setup.sh
+This fork adds a Nintendo Switch target (`platform/switch`, libnx + SDL2) with:
 
-   Windows (PowerShell):
+- **Full speed on a real Switch** (the arcade's 57.5 Hz).
+- **Multi-core rendering**: the 3D layer, the 2D tile layers and the final composition are drawn on all three
+  CPU cores, scanline by scanline, with pixel-identical output to the original renderer.
+- **Sound board on its own core**, overlapping the next frame.
+- **Boots straight into the game**, as a single cabinet (the 1994 set's factory setting is a linked twin cabinet).
+- Switch controls, an in-game menu, saves on the SD card and a Homebrew Menu icon.
 
-       powershell -ExecutionPolicy Bypass -File setup.ps1
+## Supported ROM sets
 
-   On Windows the game is built with Clang from the Visual Studio Build
-   Tools. Setup installs them, or adds the Clang tools to the Visual Studio
-   you have; Windows asks for permission for that. `setup.ps1 --msvc` uses
-   Microsoft's compiler instead.
-3. Run the command setup prints at the end (`build/daytona`, or
-   `build\Release\daytona.exe` on Windows).
-
-**Updating:** `git pull`, then run setup again (it recompiles the game from
-your ROM set, since updates can change the generated code).
-
-**Clean rebuild** (after a failed build, or to start over): delete the
-`build` folder and run setup again. Your ROM set in `roms/` and the
-downloaded libraries in `extern/` are kept.
-
-If setup fails, it says whether your ROM set was rejected (the line above
-names the file) or the build failed (the errors are just above). The
-[guide's troubleshooting](docs/getting-started.md#troubleshooting) covers
-the usual ones. Every change is built and tested by GitHub Actions on
-Windows (Clang and MSVC), macOS and Linux (GCC and Clang), without a ROM set.
-
-Setup scripts install the toolchain (C++20 compiler, CMake, Ninja, Python 3, Git;
-Visual Studio 2022 Build Tools on Windows, Homebrew packages on macOS, your
-distribution's packages on Linux), fetch the pinned dependencies into
-`extern/`, build, and run the tests. Put your ROM set at
-`roms/daytona93.zip` (or `.7z`) first and the game code is recompiled as well (into
-`build/`, never committed); Revision A at `roms/daytona.zip` is recompiled
-into `build-daytona/`. Already have a toolchain? Run
-`python3 scripts/setup.py` directly.
-
-Options: `--msvc` (setup.ps1 only: Microsoft's compiler), `--test-extras`
-(optional test dependencies), `--with-mame` (MAME source for the oracle
-test), `--build-mame` (the patched MAME that records validation traces;
-Linux and macOS).
-
-After changing the recompiler or the seeds: `python3 scripts/recompile.py`
-(and `python3 scripts/recompile.py --set daytona --build-dir build-daytona`
-for Revision A). Revision A is `build-daytona/daytona`, with its own
-settings and saves. Its factory settings are a linked twin cabinet, which
-waits for a second cabinet: set a single cabinet once in test mode (F2).
-
-## Link play (the 1994 set)
-
-Revision A (`daytona`) can link two or more cabinets over a network, Wi-Fi
-or wired, as linked arcade machines race each other (experimental). On each
-computer, in the launcher's Game tab, tick **Link to other cabinets**, give
-this cabinet's port and the next cabinet's `host:port` (the cabinets form a
-ring; with two, each one's next is the other), then in test mode (F2) >
-GAME SYSTEM set **LINK ID** (one MASTER, the others SLAVE) and a different
-**CAR NUMBER** on each. Two on one computer: start the second with
-`--profile 2` (its own settings and saves) and give the two different ports,
-e.g. 15112 and 15113, each the other's as next.
-
-## Playing
-
-    build/daytona
-
-(`build/Release/daytona.exe` with the Visual Studio generator.) The launcher
-opens first:
-
-- **Game**: choose your `daytona93` ROM set, `.zip` or `.7z` (Browse, or type the path); every file
-  is checked against the ROM set this build was recompiled from. Graphics API
-  (automatic, Vulkan, Direct3D 12, Metal), Renderer (software, the exact
-  CPU renderer; or hardware, on the GPU, experimental), Super sampling
-  (hardware renderer: off, or the 3D drawn at 2x to 4x the original resolution), fullscreen, Draw mode (double buffered,
-  as the game; single buffered or every third frame draw less often, for slower
-  machines; the game itself runs at full speed), and Skip launcher (start
-  the game straight away next time; Esc still opens the launcher). Enhancements
-  (off by default): widescreen 16:10, 16:9 or 21:9, which shows more of the
-  scene at the sides with the HUD kept 4:3 in the centre, or with "HUD at
-  the screen edges" (experimental) the lap times, position, condition panel and course map
-  moved out to the sides (in a race the sky at the sides is plain blue, or
-  with "Stretch tile background" the game's sky picture stretched across);
-  and
-  a draw distance slider for the scenery (default
-  is the game's own; shorter runs faster). Start.
-- **Controls**: bind every arcade control to a key, a gamepad button or
-  axis, and a wheel or joystick input (experimental; click, then press). Triggers, sticks,
-  wheels and pedals are analogue. Wheels, pedals and shifters work as
-  separate devices too; binding a wheel or pedal axis also sets its range
-  (turn or press as far as full lock or full travel should be, and let go).
-  Force feedback (experimental, untested on a real wheel so far): the arcade wheel's motor (centring, friction, rumble, the
-  wheel pulling) plays on the device steering is bound to (a force feedback
-  wheel, or a gamepad's rumble), with a strength slider. Live meters, dead
-  zones, invert steering.
-
-In the game, Esc brings the launcher back (Resume, Reset, Quit). Settings
-are saved as they change, with the settings EEPROM and backup RAM, in your
-user data folder (`launcher.ini`). Options: `--rom FILE.zip --autostart
---gpu vulkan|direct3d12|metal --fullscreen`.
-
-Default controls:
-
-| Control | Keyboard | Gamepad |
+| Set | Game | Notes |
 | --- | --- | --- |
-| Steer | Left / Right | Left stick (analogue) |
-| Accelerate / brake | Up / Down | Right / left trigger (analogue) |
-| Gears 1-4 | 1 2 3 4 | |
-| View buttons VR1-VR4 | A S D F | Face buttons |
-| Shift up / down | W / Q | Right / left shoulder |
-| Coin / start | 5 / Enter | Back / Start |
-| Test / service | F2 / F3 | |
-| Fullscreen / launcher | F11 / Esc | |
+| `daytona` | Daytona USA, Revision A (1994) | Recommended. Complete as a MAME set. |
+| `daytona93` | Daytona USA Deluxe '93 | Must be a **non-merged** set. MAME's split `daytona93.zip` is missing the files it shares with `daytona` (e.g. `mpr-16528.10`). |
 
-Sound: the sound board's 68000 program is statically recompiled like the
-i960 code and runs on the native board with the YM3438 (ymfm) and both
-MultiPCMs; output goes through SDL audio. Volume and mute are in the
-launcher.
+Other sets (`daytonas`, `daytonat`, `daytonase`, …) have different program ROMs and **cannot** be used, whatever
+the file is called. The ROM set must be a `.zip` (not `.7z`) on the Switch.
+
+## Building
+
+Builds run on **Linux** or **Windows with WSL** (Ubuntu). Two steps: a normal PC build, which recompiles the game
+from your ROM set, then a cross-build for the Switch.
+
+### 1. Requirements
+
+Host tools and the libraries the PC build needs (Ubuntu / Debian):
+
+```sh
+sudo apt-get update
+sudo apt-get install -y build-essential cmake ninja-build python3 git clang pkg-config unzip zip \
+  libasound2-dev libpulse-dev libx11-dev libxext-dev libxrandr-dev libxcursor-dev \
+  libxfixes-dev libxi-dev libxss-dev libxtst-dev libxkbcommon-dev libdrm-dev libgbm-dev \
+  libegl-dev libwayland-dev libdecor-0-dev libudev-dev libdbus-1-dev
+```
+
+[devkitPro](https://devkitpro.org/wiki/Getting_Started) with the Switch packages:
+
+```sh
+sudo dkp-pacman -S switch-dev switch-sdl2
+export DEVKITPRO=/opt/devkitpro
+```
+
+### 2. Get the source and your ROM set
+
+```sh
+git clone https://github.com/toniisound/daytona-recomp-nx
+cd daytona-recomp-nx
+mkdir -p roms
+cp /path/to/your/daytona.zip roms/
+```
+
+The file name must be exactly the set name: `roms/daytona.zip` or `roms/daytona93.zip`.
+
+### 3. Recompile the game on your PC
+
+```sh
+python3 scripts/setup.py
+```
+
+This fetches the pinned libraries into `extern/`, checks your ROM set, recompiles the game code into
+`build-daytona/gen/` (or `build/gen/` for `daytona93`) and builds the PC version. If the ROM set is rejected,
+the line starting with `m2import:` names the first missing or wrong file.
+
+> Generated code and everything under `build*/` is derived from your ROM set. It is git-ignored: never commit or
+> share it.
+
+### 4. Build the Switch `.nro`
+
+```sh
+python3 scripts/build_switch.py --set daytona      # or --set daytona93
+```
+
+Output: `build/switch-daytona/daytona_switch.nro` (`build/switch/` for `daytona93`).
+
+Options:
+
+| Option | Effect |
+| --- | --- |
+| `--set daytona` / `daytona93` | The ROM set you recompiled in step 3. |
+| `--icon file.jpg` | Another 256×256 JPEG for the Homebrew Menu (default: `platform/switch/icon.jpg`). |
+| `--diagnostics` | Log startup and performance to the SD card (errors are always logged). |
+| `--compile-check` | Build everything except the game code, without a ROM set. |
+| `--jobs N` | Parallel compile jobs. |
+
+## Installing
+
+Copy the `.nro` and your ROM set to the same folder on the SD card, named after the set:
+
+```
+sdmc:/switch/daytona/daytona_switch.nro
+sdmc:/switch/daytona/daytona.zip
+```
+
+(For `daytona93`: `sdmc:/switch/daytona93/` with `daytona93.zip`.)
+
+Launch it from the Homebrew Menu **with title override** (hold **R** while starting any game). Applet / album
+mode has less memory; the menu warns you if you are in it.
+
+The game starts straight away. Settings and saves are kept in the same folder:
+
+| File | Contents |
+| --- | --- |
+| `ioboard_eeprom.bin` | The game's own settings (test mode: cabinet, link, coins, difficulty…) |
+| `backup_ram.bin` | Records and bookkeeping |
+| `mute.bin`, `overlay.bin` | Menu settings |
+| `switch-diag.log` | Errors, if any |
+
+## Controls
+
+| Arcade | Switch |
+| --- | --- |
+| Steering | Left stick, or D-pad left / right |
+| Accelerator / brake | ZR / ZL, or right stick up / down (analogue) |
+| Shift up / down | R / L, or D-pad up / down |
+| View buttons (VR1–VR4) | A / B / Y / X |
+| Coin | − |
+| Start | + |
+| Test / service switches | L3 / R3 (stick clicks) |
+| **Menu** | **+ and − together** |
+
+**Menu:** resume, reset, test and service switches, sound on/off, CPU cores (3 or 1, to compare), performance bar
+(frame rate and timings at the bottom of the screen), save and quit.
+
+**Test mode:** press L3. R3 moves the cursor, L3 selects. Settings are saved automatically.
+
+## Troubleshooting
+
+| Problem | Fix |
+| --- | --- |
+| `m2import: missing mpr-16528.10` (or another `mpr-` file) | Your `daytona93.zip` is a split set. Use `daytona.zip`, or merge the parent `daytona.zip` into it. |
+| `m2import: missing epr-…` | Wrong set for that name (see *Supported ROM sets*). |
+| `ROM NOT FOUND` in the menu | The ROM set is not next to the `.nro`, or not named after the set. |
+| The game waits for a second cabinet | An old `ioboard_eeprom.bin` set to a linked cabinet: delete it, or in test mode set *GAME SYSTEM → LINK ID → SINGLE*. |
+| Buttons do nothing in Ryujinx | Check the emulator's input mapping for Player 1, including +, −, ZL/ZR and the stick clicks. |
+| Slow in Ryujinx | Expected on some PCs; test on real hardware. |
+
+## Credits
+
+- **[alphanu1](https://github.com/alphanu1)**: the Daytona USA static recompilation this port is built on.
+- **Toniisound**: Nintendo Switch port.
+- **MAME** team: Model 2 hardware code the runtime is based on (BSD-3-Clause).
+- **ymfm** (Aaron Giles), **Berkeley SoftFloat 3**, **SDL**, **devkitPro / libnx**.
+
+Every third-party component, its licence and how it is used is listed in [THIRD_PARTY.md](THIRD_PARTY.md).
+The original project's README, with the PC and PS Vita instructions, is in
+[docs/README-upstream.md](docs/README-upstream.md).

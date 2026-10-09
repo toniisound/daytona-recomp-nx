@@ -103,6 +103,17 @@ const Set &this_set() {
     throw ZipError(std::string("unknown ROM set ") + M2_ROMSET);
 }
 
+// The entry for a ROM: by MAME's current file name, else (sets dumped with an
+// older MAME, which named some files differently, e.g. "mpr-16772.19" for
+// "mpr-16772.ic19") by size and CRC. The contents are CRC-checked either way.
+const std::string *find_entry(const Archive &z, const Load &l) {
+    const auto it = z.entries().find(l.file);
+    if (it != z.entries().end()) return &it->first;
+    for (const auto &[name, entry] : z.entries())
+        if (entry.has_crc && entry.crc == l.crc && entry.size == l.size) return &name;
+    return nullptr;
+}
+
 std::string hex8(uint32_t v) {
     char b[16];
     std::snprintf(b, sizeof b, "%08x", v);
@@ -118,7 +129,8 @@ std::vector<RomCheck> check_rom_set(const std::string &zip_path) {
     for (const Load &l : std::span(set.loads, set.count)) {
         RomCheck c;
         c.file = l.file;
-        const auto it = z->entries().find(l.file);
+        const std::string *name = find_entry(*z, l);
+        const auto it = name ? z->entries().find(*name) : z->entries().end();
         if (it == z->entries().end()) c.problem = "missing";
         else if (it->second.size != l.size) c.problem = "wrong size";
         else if (it->second.has_crc && it->second.crc != l.crc)
@@ -143,7 +155,9 @@ M2Board::Images import_rom_set(const std::string &zip_path) {
     img.pcm2.assign(0x400000, 0);
     const Set &set = this_set();
     for (const Load &l : std::span(set.loads, set.count)) {
-        const std::vector<uint8_t> data = z->read(l.file); // CRC against the archive's own
+        const std::string *name = find_entry(*z, l);
+        if (!name) throw ZipError(std::string("missing ") + l.file);
+        const std::vector<uint8_t> data = z->read(*name); // CRC against the archive's own
         if (data.size() != l.size || crc32(data.data(), data.size()) != l.crc)
             throw ZipError(std::string(l.file) + ": not the " + set.name + " ROM this build was recompiled from");
         std::vector<uint8_t> *r = nullptr;
